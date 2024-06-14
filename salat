@@ -1,0 +1,624 @@
+#!/bin/sh
+
+#exist so you can rename the script to whatever you like seamlessly:
+my_script=$(basename "$0")
+data_path="$HOME/.local/share/${my_script%.*}"
+
+#dynamic variables:
+year="$(date +%Y)"
+month="$(date +%m)"
+theday="$(($(date +%_d) - 1 ))"
+
+#editable variables:
+country=''
+city=''
+method=''
+adj=''
+data_file="${country}_${city}_${year}_${month}_${method}.json"
+# 0: Imsak; 1: Fajr; 2: Sunrise; 3: Dhuhr; 4: Asr; 5: Maghrib; 6: Sunset; 7: Isha; 8: Midnight
+tune=''
+clock='12'
+
+#To save last surah read
+surah_number=''
+
+#ANSI colours"
+white="\033[1;37m"
+yellow="\033[1;33m"
+light_green="\033[1;32m"
+light_red="\033[1;31m"
+light_silver="\033[0;37m"
+defaults_colours="\033[0;38m" #not sure if it's the default or white tbh
+
+
+to12() {
+
+    if [ "${1%%:*}" -gt 12 ]; then
+        printf "%02s:%02s" "$((${1%%:*} - 12))" "${1##*:}"
+    elif [ "${1%%:*}" -eq 00 ]; then
+        printf "%02s:%02s" "12" "${1##*:}"
+    else
+        printf "${1}"
+
+    fi
+}
+
+tune_it() {
+# 0: Imsak; 1: Fajr; 2: Sunrise; 3: Dhuhr; 4: Asr; 5: Maghrib; 6: Sunset; 7: Isha; 8: Midnight
+
+    read -r imsak_tune fajr_tune sunrise_tune dhuhr_tune asr_tune maghrib_tune sunset_tune isha_tune midnight_tune <<-EOF
+    $(printf ${tune} | tr ',' ' ')
+EOF
+
+printf "(leave any empty for no change)\n"
+read -p "enter Fajr offset: (current: ${fajr_tune}) " tmp
+fajr_tune=${tmp:-"${fajr_tune}"}
+read -p "enter Dhuhr offset: (current: ${dhuhr_tune}) " tmp
+dhuhr_tune=${tmp:-"${dhuhr_tune}"}
+read -p "enter Asr offset: (current: ${asr_tune}) " tmp
+asr_tune=${tmp:-"${asr_tune}"}
+read -p "enter Maghrib offset: (current: ${maghrib_tune}) " tmp
+maghrib_tune=${tmp:-"${maghrib_tune}"}
+read -p "enter Isha offset: (current: ${isha_tune}) " tmp
+isha_tune=${tmp:-"${isha_tune}"}
+
+tune="${imsak_tune},${fajr_tune},${sunrise_tune},${dhuhr_tune},${asr_tune},${maghrib_tune},${sunset_tune},${isha_tune},${midnight_tune}"
+printf $tune
+
+write_data
+
+# read -p "enter Isha offset: (current: ${imsak_tune})" tmp
+# read -p "enter Isha offset: (current: ${sunrise_tune})" tmp
+# read -p "enter Isha offset: (current: ${sunset_tune})" tmp
+# read -p "enter Isha offset: (current: ${midnight_tune})" tmp
+
+}
+
+check_runtime () {
+
+
+		if [ ! -d "$data_path" ]; then
+
+			mkdir -p "$data_path"
+			echo -e "${light_red}please run '$my_script -S' to set up your salat database"
+            printf "${light_green}it seems it's your first time running the script, please make sure you have jq and curl installed, then run ${my_script} -S to set up your salat database\nyou can use ${my_script} -h for help\n"
+
+		elif [ ! -f "${data_path}/${data_file}" ]; then
+
+            if [ $1 != -S ]; then
+
+                printf "${light_green}you can run ${my_script} -u to download salat times\nto update your info quickly you can use ${my_script} -w country=\${your_counrty} city=\${your_city} method=\${your_preferd_method}${defaults_colours}"
+				exit 1
+
+			fi
+
+		fi
+
+}
+
+write_data () {
+
+	data_file="${country}_${city}_${year}_${month}_${method}.json"
+
+	sed -i "13s/\(country\)=.*/\1='${country}'/" "$0"
+	sed -i "14s/\(city\)=.*/\1='${city}'/" "$0"
+	sed -i "15s/\(method\)=.*/\1='${method}'/" "$0"
+	sed -i "16s/\(adj\)=.*/\1='${adj}'/" "$0"
+	sed -i "19s/\(tune\)=.*/\1='${tune}'/" "$0"
+	sed -i "20s/\(clock\)=.*/\1='${clock}'/" "$0"
+	sed -i "23s/\(surah_number\)=.*/\1='${surah_number}'/" "$0"
+
+}
+
+get_info_interactive() {
+
+	read -p "please enter your country : (this should work, but if it doesn't try two letters country code) " country
+
+	read -p "please enter your city : " city
+
+	cat << EOF
+method:  
+
+A prayer times calculation method. Methods identify various schools of thought about how to compute the timings.
+If not specified, it defaults to the closest authority based on the location(your country and city) This parameter accepts values from 1-15:
+
+1 - University of Islamic Sciences, Karachi
+2 - Islamic Society of North America
+3 - Muslim World League
+4 - Umm Al-Qura University, Makkah
+5 - Egyptian General Authority of Survey
+7 - Institute of Geophysics, University of Tehran
+8 - Gulf Region
+9 - Kuwait
+10 - Qatar
+11 - Majlis Ugama Islam Singapura, Singapore
+12 - Union Organization islamic de France
+13 - Diyanet İşleri Başkanlığı, Turkey
+14 - Spiritual Administration of Muslims of Russia
+15 - Moonsighting Committee Worldwide (also requires shafaq paramteer)
+
+EOF
+
+read -p "please enter your desired method : (leave empty for auto) " method
+
+
+#make the variable permenant, so if you delete the database file
+#or the next month comes it auto download with the same info (with corn file or when you ran the script)
+
+write_data
+
+}
+
+data_download () {
+
+	url="http://api.aladhan.com/v1/calendarByCity?city=${city:?"use salat -S to Set it up or use $my_script -w args ..."}&country=${country:?"use $my_script -S to Set it up or use $my_script -w args"}&method=$method&month=$month&year=$year&tune=$tune&adjustment=$adj"
+
+	if [ -f "${data_path}/${data_file}" ]; then
+
+        if [ "$1" != "-f" ]; then
+
+            printf "you already have the prayers calendar for ${country},${city}: ${year}-${month}\nuse $my_script -(u|3|y) -f to Download anyway.\n"
+
+        else
+
+		echo "Downloading calendar for ${year}-${month} . . ."
+		curl -fs -L "${url}" -o ${data_path}/${data_file} && echo "calendar Downloaded" || echo "something went wrong, please check your internet connection"
+
+        fi
+    fi
+
+}
+
+set_up () {
+
+	if [ "$1" != "-u" ]; then
+		check_runtime $1 &> /dev/null ## make needed dirs
+		get_info_interactive
+	fi
+
+	data_download $2
+
+}
+
+cals_download () {
+
+	for i in $(seq 1 "$1"); do
+
+		month=$(date --date="$i months" +%m)
+		year=$(date --date="$i months" +%Y)
+
+		data_file="${country}_${city}_${year}_${month}_${method}.json"
+
+		data_download $2
+
+	done
+
+}
+
+print_salat () {
+
+    read -r Fajr Dhuhr Asr Maghrib Isha <<-EOF
+    $(<"${data_path}/${data_file}" jq ".data[$theday].timings | {Fajr,Dhuhr,Asr,Maghrib,Isha} | join(\"\")" | sed 's/(+03)//g;s/\"//g')
+EOF
+
+if [ "$1" = "-p" ]; then
+
+    if [ "$clock" = "24" ]; then
+
+        printf "\n ${light_green}Fajr: ${white}%s\n\n ${light_green}Dhuhr: ${white}%s\n\n ${light_green}Asr: ${white}%s\n\n ${light_green}Maghrib: ${white}%s\n\n ${light_green}Isha: ${white}%s\n\n${defaults_colours}"\
+            "$Fajr" "$Dhuhr" "$Asr" "$Maghrib" "$Isha"
+    else
+
+                    printf "\n ${light_green}Fajr: ${white}%s\n\n ${light_green}Dhuhr: ${white}%s\n\n ${light_green}Asr: ${white}%s\n\n ${light_green}Maghrib: ${white}%s\n\n ${light_green}Isha: ${white}%s\n\n${defaults_colours}"\
+                        "$(to12 $Fajr)" "$(to12 $Dhuhr)" "$(to12 $Asr)" "$(to12 $Maghrib)" "$(to12 $Isha)"
+    fi
+fi
+
+}
+
+next_salat () {
+
+	#to get salat times variables
+	print_salat
+
+	salat_day="today"
+
+    NOW="$(date +%H%M-%s)"
+
+    if [ "${NOW%%-*}" -ge "${Isha%%:*}${Isha##*:}" ]; then
+
+        salat_day="tomorrow" # needed for remaining_time func
+        salat_date=$(date --date="tomorrow" +%m-%_d)
+        month="${salat_date%%-*}"
+        theday="$((${salat_date##*-} - 1))"
+
+        # month=$(date --date="tomorrow" +%m) #to be used later
+        # theday=$(($(date --date="tomorrow" +%_d) - 1)) # as index start from 0, this means tomorrow
+
+        data_file="${country}_${city}_${year}_${month}_${method}.json"
+
+        Fajr=$(jq -r .data["${theday}"].timings.Fajr "${data_path}/${data_file}")
+
+        nextsalat="${Fajr%% *}"
+
+    elif [ "${NOW%%-*}" -ge "${Maghrib%%:*}${Maghrib##*:}" ]; then
+
+        nextsalat="${Isha}"
+
+    elif [ "${NOW%%-*}" -ge "${Asr%%:*}${Asr##*:}" ]; then
+
+        nextsalat="${Maghrib}"
+
+    elif [ "${NOW%%-*}" -ge "${Dhuhr%%:*}${Dhuhr##*:}" ]; then
+
+        nextsalat="${Asr}"
+
+    elif [ "${NOW%%-*}" -ge "${Fajr%%:*}${Fajr##*:}" ]; then
+
+        nextsalat="${Dhuhr}"
+
+    else
+
+        nextsalat="${Fajr}"
+
+    fi
+}
+
+remaining_time () {
+
+    nextSalat_second=$(date --date="${nextsalat} ${salat_day}" +%s)
+
+	remaining_hours=$(( ( ${nextSalat_second} - ${NOW##*-} )/3600))
+	remaining_minutes=$(( ((${nextSalat_second} - ${NOW##*-}) % 3600) * 60 / 3600 ))
+
+	printf "${light_red}%02d:%02d\n${defaults_colours}" "${remaining_hours}" "${remaining_minutes}"
+
+}
+
+hijri_date () {
+
+    read -r hijri_year hijri_day <<-EOF
+    $(<"${data_path}/${data_file}" jq ".data[$theday].date.hijri | {year,day} | join(\" \")" | sed 's/(+03)//g;s/\"//g')
+EOF
+
+    read -r hijri_month hijri_month_name <<-EOF
+    $(<"${data_path}/${data_file}" jq ".data[$theday].date.hijri.month | {number,en} | join(\" \")" | sed 's/(+03)//g;s/\"//g')
+EOF
+
+	printf "${white}%s-%s-%s ${light_silver}%s\n${white}$(date +%H:%M:%S)\n${defaults_colours}" "$hijri_year" "$hijri_month" "$hijri_day" "$hijri_month_name"
+}
+
+get_help () {
+
+	cat << EOF
+usage: $my_script [--OPTION] [--SUBOPTION]
+
+a cli tool for muslims 
+
+Options:
+
+setting up:
+
+  -S			use it in the first run,
+  			it will ask you for your country, city and preferd method
+  
+  -u (-f)		to update the database in case of a manual change in your info
+      -f		to force the update - in case of an empty database file for example-
+  
+  -w			to manually edit your info
+			usage: $my_script -w country=saudi city=makka . . .
+			you can edit one option or more .
+
+  --offset  offset prayers timings (maybe to be more in line with your local mosque)
+
+  -m			to list timings in all methods so you can choose the best fitting one
+
+  -3			to download database for the next 3 months
+
+  -y			to download database for the next 12 months
+
+Salat:
+$my_script [option]
+
+  $my_script		with no options it will print today salat timings 
+  $my_script \$day      it will print salat timings for that specific day
+  			eg: salat 20
+  
+  -n			print how much time until the next salat
+
+Moshaf:
+$my_script -q [option]
+$my_script -q surah name (arabic|english) or number
+
+  -i			to get Moshaf Edition
+
+  -l			will list surahs names (english and arabic) and their numbers
+
+			with no option it will give you the last opened surah
+			you can choose surahs by (arabic|english)name / number
+			
+ranges like 1:10	you can specify a range of ayahs in surah to print
+			like: $my_script -q an-naas 1:3
+
+Hadith:
+salat -s text (arabic only)
+
+			it will search for hadith text using dorar api (jazahom allah khairan)
+
+Dates & Times:
+$my_script (-d|-t)
+
+  -t			to get day times (night thirds, sunset and sunrise)
+
+  -d			to get hijri date
+
+
+additional options:
+use $my_script -w clock=(12|24) to convert time between 12 and 24 ...
+
+    $my_script -w adj=(number)  to adjuste hijri date in case of a mistakes,
+		don't forget to update with $my_script -u -f	(no need to update in case of 12/24 converting)
+
+it uses aladhan.com api to download every month calendar 
+EOF
+
+}
+
+thirds () {
+
+
+    read -r sunrise sunset first_third last_third midnight <<-EOF
+    $(<"${data_path}/${data_file}" jq ".data[$theday].timings | {Sunrise,Sunset,Firstthird,Lastthird,Midnight} | join(\"\")" | sed 's/(+03)//g;s/\"//g')
+EOF
+
+	printf "\n ${yellow}Sunrise: ${white}%s\n\n ${yellow}Sunset: ${white}%s\n\n" \
+		"$sunrise" "$sunset" 
+
+	printf "\n ${white}FirstThird: ${white}%s\n\n ${white}MidNight: ${white}%s\n\n ${white}LastThird: ${white}%s\n\n${defaults_colours}" \
+		"$first_third" "$midnight" "$last_third"  
+
+}
+
+get_info () {
+
+	for var in $@; do
+
+		if [ "$var" != "-w" ]; then
+			export "$var" # makse sure it works with dash, or go back to eval
+		fi
+
+	done
+}
+
+get_methods () {
+
+    for method in $(seq 1 15); do
+
+		printf "${light_green}method $method:\n${white}"
+
+		curl -L -s "https://api.aladhan.com/v1/timingsByAddress/${theday}-${month}-${year}?address=${city},${country}&method=${method}" |\
+			jq '.data.timings  | {Fajr,Dhuhr,Asr,Maghrib,Isha} ' | sed 's/[{}"]//g' | sed 's/,/\n/g'
+
+		printf "\n"
+
+	done
+
+	printf "${defaults_colours}"
+}
+
+search_hadith () {
+
+	my_search="$(printf $1 | jq -sRr @uri)"
+
+	curl -s "https://dorar.net/dorar_api.json?skey=${my_search}" | sed 's/\\n/\n/g;s/[a-z<=\:/><\"{}]//g;s/-;/- /g' | sed '$d'
+
+}
+
+interactive_search_hadith () {
+
+	reading="$1"
+	printf "\n"
+	search_hadith "$1"
+
+	while [ "$reading" != q ]
+	do
+		read -e -i "$reading" -p ':' reading
+		printf "${ligh_green}=============================================${defaults_colours}"
+		my_search="$reading"
+		search_hadith
+	done
+
+}
+
+Moshaf_checkruntime () { 
+
+    if [ ! -f "$data_path/Moshaf.json" ]; then
+
+        printf "Downloading Moshaf from 'api.alquran.cloud' jazahom allah khaeran\n"
+        # add a check for http respond to report errors
+        curl -s http://api.alquran.cloud/v1/quran/quran-uthmani -o "$data_path/Moshaf.json"\
+            && printf "Downloaded!\n" || printf "Download failed, please check your internet connection .\n"
+
+        printf "use -i to get Moshaf Edition\n\t -l to list surahs with its number\nuse surahs number from '$my_script -q -l' to recite Moshaf\nfor example: $my_script -q -n 113\n"
+
+        exit 1
+
+    fi
+
+}
+
+Moshaf () {
+
+    Moshaf_checkruntime
+
+    case "$1" in
+
+        "-i") #get info about Moshaf edition
+
+            jq .data.edition "${data_path}/Moshaf.json"
+
+            ;;
+
+        "-l")
+
+            jq '.data.surahs[] | {number,name,englishName}' "${data_path}/Moshaf.json"
+
+            ;;
+
+
+        [0-9]*)
+
+            surah_number="$1"
+
+            one="${2%%:*}" #for ranges
+            two="${2##*:}"
+
+            jq -r ".data.surahs[$(( ${surah_number} - 1))].ayahs[] | {text,numberInSurah} | join(\" \")" $data_path/Moshaf.json | \
+            awk " BEGIN {print \" \" } { gsub(\"[0-9][0-9]?[0-9]?\", \"{&}\n\")}; /{${one:-"1"}}/,/{${two:-".*"}}/ { print }"
+            write_data
+
+            ;;
+
+        [A-Za-z]*)
+
+            surah_number=$(jq -r ".data.surahs[] | {number,englishName} | join (\" \")" $data_path/Moshaf.json | grep -i ${1:?"usage: $my_script -q surah_name"} | grep -m1 -o "[0-9]*")
+
+            one="${2%%:*}"
+            two="${2##*:}"
+
+            jq -r ".data.surahs[$(( ${surah_number:?"surah not found"} - 1))].ayahs[] | {text,numberInSurah} | join(\" \")" $data_path/Moshaf.json |\
+            awk " BEGIN {print \" \" } { gsub(\"[0-9][0-9]?[0-9]?\", \"{&}\n\")}; /{${one:-".*"}}/,/{${two:-".*"}}/ { print } "
+            write_data
+
+            ;;
+
+        "")
+
+            jq -r ".data.surahs[$(( ${surah_number} - 1))].ayahs[] | {text,numberInSurah} | join(\" \")" $data_path/Moshaf.json | sed -E 's/([0-9]{1,3})/{&}\n/g;1i\ '
+
+            ;;
+
+        *)
+
+            surah_number=$(jq -r ".data.surahs[] | {number,name} | join (\" \")" $data_path/Moshaf.json | sed 's/َ//g;s/ُ//g;s/ِ//g;s/ّ//g;s/ً//g;s/ٌ//g;s/ٍ//g;s/ّ//g;s/إ/ا/g;s/آ//g;s/إ//g;s/ْ//g;s/ّ//g' | grep ${1:?"usage: $my_script -q surah_name(arabic)"} | grep -m1 -o "[0-9]*")
+
+            one="${2%%:*}"
+            two="${2##*:}"
+
+            jq -r ".data.surahs[$(( ${surah_number:?"surah not found"} - 1))].ayahs[] | {text,numberInSurah} | join(\" \")" $data_path/Moshaf.json |\
+            awk " BEGIN {print \" \" } { gsub(\"[0-9][0-9]?[0-9]?\", \"{&}\n\")}; /{${one:-".*"}}/,/{${two:-".*"}}/ { print } "
+            write_data
+
+        esac
+
+}
+
+    case "$1" in
+
+        "-S" | "--setup") 
+
+            set_up "$@"
+
+            printf "\n${light_red}===============================================${defaults_colours}\n"
+
+            print_salat
+
+            ;;
+
+        "-u" | "--update")
+
+            data_download "$2"
+
+            ;;
+
+        "-3")
+
+            cals_download 3 "$2"
+
+            ;;
+        "-y")
+
+            cals_download 12 "$2"
+
+            ;;
+
+        "-w" | "--write")
+
+            get_info "$@"
+
+            write_data
+
+            ;;
+
+        "--offset")
+
+            tune_it
+
+            ;;
+
+        "-m")
+
+            get_methods
+
+            ;;
+
+        "-n" )
+
+            next_salat
+            remaining_time
+
+            ;;
+
+        "-d" | "--hijri")
+
+            hijri_date
+
+            ;;
+
+        "-t" | "--timings")
+
+            thirds
+
+            ;;
+
+        "-q" | "--quran")
+
+            Moshaf "$2" "$3"
+
+            ;;
+
+        "-s")
+
+            search_hadith "$2"
+
+            ;;
+
+        "-si")
+
+            interactive_search_hadith "$2"
+
+            ;;
+
+        "-h" | "--help")
+
+            get_help
+
+            ;;
+
+        [0-9]*)
+
+            theday="$(($1 - 1))"
+            month="${2:-${month}}"
+            data_file="${country}_${city}_${year}_${month}_${method}.json"
+
+            print_salat -p
+
+            ;;
+
+        *)	
+
+            check_runtime 
+            print_salat -p
+
+            ;;
+    esac
