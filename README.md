@@ -46,4 +46,4 @@ report issues, make pull requests, suggest features (or even ideas for a whole o
 
 ## TODO
 
-* [] better help
+* [ ] better help
