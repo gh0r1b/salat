@@ -38,6 +38,15 @@ salat -d
 salat -h # help is work in progress
 ```
 
+## set up
+
+```bash
+git clone https://github.com/gh0r1b/salat.git
+mv salat/salat ~/.local/bin/salat
+chmod u+x ~/.local/bin/salat
+salat -S  # set up your country, city and prefered method
+```
+
 ## helping out
 
 wanna help ?
